@@ -1,0 +1,184 @@
+######################################
+# Creating AMI image
+######################################
+aws ec2 create-restore-image-task --object-key ami-08dff635fabae32e7.bin --bucket udacity-srend --name "udacity-sre-course1-project-ami-image"
+
+[(Output)]
+{
+    "ImageId": "ami-0076331cefd54999d"
+}
+
+
+-----------------------------------------------------------------------------------------------
+######################################
+# Terraform apply issue (Instance not found)
+######################################
+
+aws ec2 copy-image --source-image-id ami-0076331cefd54999d --source-region us-east-1 --region us-east-2 --name "udacity-snoovao"
+
+[--name udacity-snoovao (Output)]
+{
+    "ImageId": "ami-068244a78a5b81f40"
+}
+
+1. Modify the _config.tf file
+-> bucket = "your-terraform-bucket-you-created-in-S3" (e.g - udacity-course1-terraform)
+-> region = "us-east-1"
+
+2. Modify the ec2.tf file
+-> aws_ami = "ami-output-created-from-the-aws-ec2-copy-image-command"
+
+3. terraform init | terraform init -reconfigure
+4. terraform apply
+5. follow instructions and type 'yes'
+6. The instance and cluster will be created in us-east-2 region. Don't forget to change your region.
+
+
+-----------------------------------------------------------------------------------------------
+######################################
+# Installing Node Explorer
+######################################
+
+[Node Explorer]
+sudo useradd --no-create-home --shell /bin/false node_exporter
+wget https://github.com/prometheus/node_exporter/releases/download/v1.2.2/node_exporter-1.2.2.linux-amd64.tar.gz
+tar xvfz node_exporter-1.2.2.linux-amd64.tar.gz
+sudo cp node_exporter-1.2.2.linux-amd64/node_exporter /usr/local/bin
+sudo chown node_exporter:node_exporter /usr/local/bin/node_exporter
+sudo nano /etc/systemd/system/node_exporter.service
+
+[Unit]
+Description=Node Exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+ExecStart=/usr/local/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target
+
+sudo systemctl daemon-reload
+sudo systemctl enable node_exporter
+sudo systemctl start node_exporter
+sudo systemctl status node_exporter
+
+sudo ufw allow 9100/tcp
+sudo systemctl restart ufw
+
+
+-----------------------------------------------------------------------------------------------
+######################################
+# SSH issue with EC2 instance
+######################################
+
+1. Most likely will need to modify the security group attached to the EC2 instance as the Terraform initializer does not connect the
+supposed security group to our instance, it will be created but it won't be linked to our EC2 instance and we can't link it as they
+are not on the same network. So we need to add rules to our existing security group.
+2. Add the following inbound rules to the security group of the instance named "ubuntu".
+-> SSH | TCP | 22 | Custom | 0.0.0.0/0
+-> HTTP | TCP | 80 | Custom | 0.0.0.0/0
+-> Custom TCP | TCP | 9100 | Custom | 0.0.0.0/0
+-> All Traffic | All | All | Custom | 0.0.0.0/0 
+
+
+-----------------------------------------------------------------------------------------------
+######################################
+# Testing Connectivity to Flask App
+######################################
+
+1. Download Postman or use online version
+2. Import collections from GitHub repository into Postman.
+-> SRE-Project-postman-collection.json
+-> SRE-Project.postman_environment.json
+3. Add some default values from the left hand tab > environments > SRE Project > [public-ip;username;email] : They can be any value, then save it.
+4. Once saved. From the left hand tab > collections > SRE Project > Click each drop down (i.e Initialize the Database etc) > Click Send.
+5. Proceed with next Project Instructions regarding EKS and the Kube config file.
+
+
+-----------------------------------------------------------------------------------------------
+######################################
+# Helm installing prometheus issues
+######################################
+===============================================================================================
+[ISSUE AFTER COMMAND]
+helm install prometheus prometheus-community/kube-prometheus-stack -f "values.yaml" --namespace monitoring
+===============================================================================================
+[FIX]
+kubectl get validatingwebhookconfiguration -A
+
+[Output Below Example]
+------------------------------------------------------
+NAME                                   WEBHOOKS   AGE
+prometheus-kube-prometheus-admission   1          28h
+------------------------------------------------------
+1. Delete the listed items to reset configuration like below:
+-> kubectl delete validatingwebhookconfiguration/<Listed item NAME> -A
+-> [Example]: kubectl delete validatingwebhookconfiguration/prometheus-kube-prometheus-admission -A
+2. Run helm install or helm upgrade like so:
+-> helm install prometheus prometheus-community/kube-prometheus-stack -f "values.yaml" --namespace monitoring
+-> helm upgrade -i prometheus prometheus-community/kube-prometheus-stack -f "values.yaml" --namespace monitoring
+
+
+-----------------------------------------------------------------------------------------------
+######################################
+# Prometheus & Grafana setup issues
+######################################
+
+aws eks --region us-east-2  update-kubeconfig --name udacity-cluster
+ERROR: An error occurred (ResourceNotFoundException) when calling the DescribeCluster operation: No cluster found for name: udacity-cluster.
+-> cat ~/.aws/config or cat ~/.aws/credentials
+-> select your profile from the output command
+-> aws AWS_PROFILE="Your-AWS-Profile"
+
+# Run command again:-
+aws eks --region us-east-2  update-kubeconfig --name udacity-cluster
+[output] Added new context arn:aws:eks:us-east-2:135926006573:cluster/udacity-cluster to home/username/.kube/config
+# Then
+kubectl create namespace monitoring
+kubectl create secret generic additional-scrape-configs --from-file=prometheus-additional.yaml --namespace monitoring
+helm repo update
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm install prometheus prometheus-community/kube-prometheus-stack -f "values.yaml" --namespace monitoring
+
+[Check Status (OPTIONAL)] 
+kubectl --namespace monitoring get pods -l "release=prometheus"
+
+[GRAFANA LOGIN CLI]
+kubectl port-forward service/prometheus-grafana 3000:80
+-> Go to browser address > 127.0.0.1:8080
+
+[GRAFANA LOGIN LENS]
+-> Open Lens > Connect to cluster [udacity-cluster] > Network > Services > prometheus-grafana > click on hyperlink next to Ports
+
+
+-----------------------------------------------------------------------------------------------
+######################################
+# Blackbox setup issues
+######################################
+Note : Token comes from the POST Method http://ip.address/auth/register > Response Body > "token"
+Note : blackbox-values.yaml is located in the GitHub repository provided.
+Token : RPDBPG8KBZTEQPCKB7YOMCK67M66CCXQLXXYNU64H3E7LW1641
+
+# Uncomment the following lines
+config:
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 5s
+        http:
+          valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+          follow_redirects: true
+          preferred_ip_protocol: "ip4"
+          valid_status_codes:
+            - 200
+            # - 401
+            # - 403
+          bearer_token: "RPDBPG8KBZTEQPCKB7YOMCK67M66CCXQLXXYNU64H3E7LW1641"
+
+Note: The following commands contain the -f and I did not specifiy the full path as I ran the command in the same directory containing the file.
+helm install prometheus-blackbox-exporter prometheus-community/prometheus-blackbox-exporter -f "blackbox-values.yaml" --namespace monitoring
+helm upgrade -i prometheus-blackbox-exporter prometheus-community/prometheus-blackbox-exporter -f "blackbox-values.yaml" --namespace monitoring
